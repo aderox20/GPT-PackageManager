@@ -1,2 +1,2 @@
 # GPT-PackageManager
-GPTOS's Package Manager
+Readme.md not made yet T_T
