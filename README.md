@@ -1,2 +1,2 @@
 # GPT-PackageManager
-Readme.md not made yet T_T
+README.md not made yet T_T
