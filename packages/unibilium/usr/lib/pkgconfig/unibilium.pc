@@ -1,9 +1,0 @@
-libdir=/usr/lib
-includedir=/usr/include
-version=2.1.2
-
-Name: unibilium
-Description: terminfo parser and utility functions
-Version: ${version}
-Libs: -L${libdir} -lunibilium
-Cflags: -I${includedir}
