@@ -1,4 +1,4 @@
-# GPT Package File (GPTP) Specification
+# GPT Package (GPTP) Specification
 
 ## Status
 
