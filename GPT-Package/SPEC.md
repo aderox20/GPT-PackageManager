@@ -247,16 +247,16 @@ type=<package|executable|library|kernel|firmware>
 
 ### Metadata fields
 
-| Field      | Description                                                                        |
-| ---------- | ---------------------------------------------------------------------------------- |
-| `format`   | Declares whether the package metadata identifies as GPTP or non-gptpm made  `!GPTP` |
-| `gversion` | GPTP metadata version                                                              |
-| `gcreator` | Program or creator that generated the GPTP                                         |
-| `dev`      | Developer or upstream project                                                      |
-| `pkgname`  | Package name                                                                       |
-| `pkgver`   | Package version                                                                    |
-| `arch`     | Target architecture                                                                |
-| `type`     | Package type                                                                       |
+| Field      | Description                                                                         |
+| ---------- | ----------------------------------------------------------------------------------- |
+| `format`   | Declares whether the package metadata identifies as GPTP or non-gptpm made  `!GPTP ` |
+| `gversion` | GPTP metadata version                                                               |
+| `gcreator` | Program or creator that generated the GPTP                                          |
+| `dev`      | Developer or upstream project                                                       |
+| `pkgname`  | Package name                                                                        |
+| `pkgver`   | Package version                                                                     | 
+| `arch`     | Target architecture                                                                 |
+| `type`     | Package type                                                                        |
 
 Valid `type` values are:
 
