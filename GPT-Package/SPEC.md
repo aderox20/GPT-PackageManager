@@ -1,5 +1,4 @@
-Yep. From the repo root:
-
+# Spec File
 ````bash
 mkdir -p GPT-Package
 cat > GPT-Package/SPEC.md <<'EOF'
