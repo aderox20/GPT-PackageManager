@@ -249,7 +249,7 @@ type=<package|executable|library|kernel|firmware>
 
 | Field      | Description                                                                                         |
 | ---------- | --------------------------------------------------------------------------------------------------- |
-| `format`   | Identifies the metadata format: `GPTP` for GPTPM-created packages or `!GPTP` for non-GPTPM packages |
+| `format`   | Identifies the metadata format: `GPTP` for GPTPM-created packages or `!GPTP` for non-GPTPM made GPTP files |
 | `gversion` | GPTP metadata version                                                                               |
 | `gcreator` | Program or creator that generated the GPTP                                                          |
 | `dev`      | Developer or upstream project                                                                       |
