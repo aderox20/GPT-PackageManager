@@ -1,349 +1,1073 @@
 #!/usr/bin/env bash
 
-ROOT="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_PATH="$(readlink -f "$0")"
+ROOT="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+
 PKG_DIR="$ROOT/packages"
 TMP_DIR="$ROOT/tmp"
 BUILD_DIR="$ROOT/build"
-LOCAL_BIN="$HOME/.local/bin"
-GPT_BUILD="$ROOT/tools/build_gptp.sh"
 
-mkdir -p "$PKG_DIR" "$TMP_DIR" "$BUILD_DIR" "$LOCAL_BIN"
+PREFIX_DEFAULT="/usr"
+CONFIG_DIR="${GPTPM_CONFIG_DIR:-/etc/gptpm}"
+CONFIG_FILE="$CONFIG_DIR/config"
+
+if [ "$(id -u)" -eq 0 ]; then
+  mkdir -p "$CONFIG_DIR"
+fi
+
+[ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE"
+
+PREFIX="${PREFIX_DEFAULT:-/usr}"
+
+GPT_BUILD="$ROOT/GPT-Package/build_gptp.sh"
+
+NOCLEAR=0
+
+mkdir -p "$PKG_DIR" "$TMP_DIR" "$BUILD_DIR"
+if [ "$(id -u)" -eq 0 ]; then
+  mkdir -p "$CONFIG_DIR"
+fi
 
 header() {
-    clear 2>/dev/null || true
-    echo "========================================"
-    echo "     GPT Package Manager (GPTPM)"
-    echo "========================================"
-    echo ""
+  [ "${NOCLEAR:-0}" -eq 1 ] || clear || true
+  echo "========================================"
+  echo "     GPT Package Manager (GPTPM)"
+  echo "========================================"
+  echo ""
 }
 
 require_cmd() {
-    local cmd="$1"
-    if ! command -v "$cmd" &>/dev/null; then
-        echo "[-] Required command not found: $cmd"
-        exit 1
-    fi
+  local cmd="$1"
+  if ! command -v "$cmd" &>/dev/null; then
+    echo "[-] Required command not found: $cmd"
+    exit 1
+  fi
 }
 
 draw_progress() {
-    local pkgname="$1"
-    local pct="$2"
+  local pkgname="$1"
+  local pct="$2"
 
-    local bar_w=34
-    local fill=$((pct * bar_w / 100))
-    [ "$fill" -gt "$bar_w" ] && fill=$bar_w
+  local bar_w=34
+  local fill=$((pct * bar_w / 100))
+  [ "$fill" -gt "$bar_w" ] && fill=$bar_w
 
-    local bar=""
-    local i=0
-    while [ $i -lt "$fill" ]; do bar="${bar}█"; i=$((i + 1)); done
-    while [ $i -lt "$bar_w" ]; do bar="${bar}░"; i=$((i + 1)); done
+  local bar=""
+  local i=0
+  while [ $i -lt "$fill" ]; do
+    bar="${bar}█"
+    i=$((i + 1))
+  done
+  while [ $i -lt "$bar_w" ]; do
+    bar="${bar}░"
+    i=$((i + 1))
+  done
 
-    local pct_str
-    pct_str=$(printf '%3d%%' "$pct")
+  local pct_str
+  pct_str=$(printf '%3d%%' "$pct")
 
-    local display="$pkgname"
-    [ ${#display} -gt 20 ] && display="${display:0:17}..."
-    printf "\r  Downloading %-20s  %s  %s   " "$display" "$bar" "$pct_str"
+  local display="$pkgname"
+  [ ${#display} -gt 20 ] && display="${display:0:17}..."
+  printf "\r  Downloading %-20s  %s  %s   " "$display" "$bar" "$pct_str"
 }
 
 download_single() {
-    local pkgname="$1"
-    local url="$2"
-    local output="$3"
+  local pkgname="$1"
+  local url="$2"
+  local output="$3"
 
-    local total
-    total=$(curl -sIL "$url" | grep -i content-length | tail -1 | awk '{print $2}' | tr -d '\r')
+  local total
+  total=$(wget --spider --server-response "$url" 2>&1 | grep -i "Content-Length:" | tail -1 | awk '{print $2}')
 
-    if [ -n "$total" ] && [ "$total" -gt 0 ] 2>/dev/null; then
-        draw_progress "$pkgname" 0
-        (
-            curl -sL -o "$output" "$url"
-            echo $? > "$output.ret"
-        ) &
-        local pid=$!
-        local last_pct=-1
+  if [ -n "$total" ] && [ "$total" -gt 0 ]; then
+    draw_progress "$pkgname" 0
+    (
+      wget -q -O "$output" "$url"
+      echo $? >"$output.ret"
+    ) &
+    local pid=$!
+    local last_pct=-1
 
-        while true; do
-            [ -f "$output.ret" ] && break
-            local downloaded=0
-            [ -f "$output" ] && downloaded=$(stat -c%s "$output" 2>/dev/null || echo 0)
-            local pct=$((downloaded * 100 / total))
-            [ "$pct" -gt 100 ] && pct=100
+    while true; do
+      [ -f "$output.ret" ] && break
+      local downloaded=0
+      [ -f "$output" ] && downloaded=$(stat -c%s "$output" || echo 0)
+      local pct=$((downloaded * 100 / total))
+      [ "$pct" -gt 100 ] && pct=100
 
-            if [ "$pct" -ne "$last_pct" ]; then
-                draw_progress "$pkgname" "$pct"
-                last_pct=$pct
-            fi
+      if [ "$pct" -ne "$last_pct" ]; then
+        draw_progress "$pkgname" "$pct"
+        last_pct=$pct
+      fi
 
-            sleep 0.1
-        done
+      sleep 0.1
+    done
 
-        wait "$pid" 2>/dev/null
-        local ret
-        ret=$(cat "$output.ret" 2>/dev/null || echo 1)
-        rm -f "$output.ret"
+    wait "$pid"
+    local ret
+    ret=$(cat "$output.ret" || echo 1)
+    rm -f "$output.ret"
 
-        if [ "$last_pct" -ne 100 ]; then
-            draw_progress "$pkgname" 100
-        fi
-        printf "\n"
-        return "$ret"
-    else
-        draw_progress "$pkgname" 0
-        printf "\n"
-        curl -sfL -o "$output" "$url"
-        local ret=$?
-        return $ret
+    if [ "$last_pct" -ne 100 ]; then
+      draw_progress "$pkgname" 100
     fi
+    printf "\n"
+    return "$ret"
+  else
+    draw_progress "$pkgname" 0
+    printf "\n"
+    wget -q -O "$output" "$url"
+    local ret=$?
+    return $ret
+  fi
 }
 
 query_api() {
-    local pkg="$1"
-    local json
-    json=$(curl -sf "https://archlinux.org/packages/search/json/?name=$pkg") || return 1
-    local count
-    count=$(echo "$json" | jq -r '.count // 0')
-    [ "$count" -eq 0 ] && return 1
-    echo "$json"
+  local pkg="$1"
+  local json
+  json=$(wget -qO- "https://archlinux.org/packages/search/json/?name=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$pkg")") || return 1
+  local count
+  count=$(echo "$json" | jq -r '.count // 0')
+  [ "$count" -eq 0 ] && return 1
+  echo "$json"
+}
+
+search_pkg() {
+  local query="$1"
+
+  [ -n "$query" ] || {
+    echo "[!] No search query specified."
+    return 1
+  }
+
+  echo "Searching packages for: $query"
+  echo ""
+
+  local json
+  json=$(query_api "$query") || {
+    echo "[!] Package search failed."
+    return 1
+  }
+
+  echo "$json" | jq -r '
+    .results[] |
+    "\(.pkgname // .name)\t\(.pkgver // .version)\t\(.repo // "-")\t\(.arch // "-")"
+  ' | while IFS=$'\t' read -r name version repo arch; do
+    printf '%-30s %-20s %-12s %s\n' "$name" "$version" "$repo" "$arch"
+  done
 }
 
 install_single() {
-    local pkg="$1"
+  local pkg="$1"
+  local prefix="${2:-$PREFIX}"
 
-    local json
-    json=$(query_api "$pkg") || {
-        echo "  [-] Package '$pkg' not found."
-        echo ""
-        return 1
+  local json
+  json=$(query_api "$pkg") || {
+    echo "  [-] Package '$pkg' not found."
+    echo ""
+    return 1
+  }
+
+  local repo arch pkgname version filename
+  repo=$(echo "$json" | jq -r '.results[0].repo // ""')
+  arch=$(echo "$json" | jq -r '.results[0].arch // "x86_64"')
+  pkgname=$(echo "$json" | jq -r '.results[0].pkgname // .results[0].name // ""')
+  version=$(echo "$json" | jq -r '.results[0].pkgver // .results[0].version // ""')
+  filename=$(echo "$json" | jq -r '.results[0].filename // ""')
+
+  # Get upstream project URL from Arch package metadata.
+  local upstream_url dev
+  upstream_url=$(echo "$json" | jq -r '.results[0].url // ""')
+
+  dev="unknown"
+  if [ -n "$upstream_url" ]; then
+    dev=$(python3 - "$upstream_url" <<'PYDEV'
+import sys
+from urllib.parse import urlparse
+
+url = sys.argv[1]
+host = urlparse(url).netloc.lower()
+parts = [p for p in urlparse(url).path.split("/") if p]
+
+if host.endswith("github.com") and parts:
+    print(parts[0])
+elif host.endswith("gitlab.com") and parts:
+    print(parts[0])
+elif host.endswith("codeberg.org") and parts:
+    print(parts[0])
+else:
+    print(host.removeprefix("www.").split(".")[0] if host else "unknown")
+PYDEV
+)
+  fi
+
+  if [ -z "$pkgname" ] || [ -z "$repo" ] || [ -z "$filename" ]; then
+    echo "  [-] Incomplete package metadata."
+    echo ""
+    return 1
+  fi
+
+  local download_url="https://archlinux.org/packages/$repo/$arch/$pkgname/download/"
+
+  download_single "$pkgname" "$download_url" "$TMP_DIR/$filename" || {
+    echo "  [-] Download failed."
+    echo ""
+    return 1
+  }
+
+  local archive="$TMP_DIR/$filename"
+
+  if [ ! -s "$archive" ]; then
+    echo "  [-] Downloaded file is empty."
+    rm -f "$archive"
+    return 1
+  fi
+
+  echo "  ├─ Extracting $pkgname..."
+
+  local target="$PKG_DIR/$pkgname"
+  rm -rf "$target"
+  mkdir -p "$target"
+
+  tar --use-compress-program=unzstd -xf "$archive" -C "$target" || {
+    echo "  [-] Extraction failed."
+    return 1
+  }
+
+  echo "  ├─ Installing into $prefix..."
+
+  mkdir -p "$prefix"
+
+  for item in "$target"/* "$target"/.[!.]* "$target"/..?*; do
+    [ -e "$item" ] || [ -L "$item" ] || continue
+
+    case "$(basename "$item")" in
+      .PKGINFO|.BUILDINFO|.MTREE|.INSTALL|.GPTP)
+        continue
+        ;;
+    esac
+
+    cp -a "$item" "$prefix"/ || {
+      echo "  [-] Installation failed."
+      return 1
     }
+  done
 
-    local repo arch pkgname version filename
-    repo=$(echo "$json" | jq -r '.results[0].repo // ""')
-    arch=$(echo "$json" | jq -r '.results[0].arch // "x86_64"')
-    pkgname=$(echo "$json" | jq -r '.results[0].pkgname // .results[0].name // ""')
-    version=$(echo "$json" | jq -r '.results[0].pkgver // .results[0].version // ""')
-    filename=$(echo "$json" | jq -r '.results[0].filename // ""')
+  # Store exactly where this package was installed.
+  printf '%s\n' "$prefix" > "$target/.gptpm-prefix"
+  printf '%s\n' "$version" > "$target/.gptpm-version"
 
-    if [ -z "$pkgname" ] || [ -z "$repo" ] || [ -z "$filename" ]; then
-        echo "  [-] Incomplete package metadata."
-        echo ""
-        return 1
+  # Store installed paths for reliable removal.
+  (
+    cd "$target" || exit 1
+    find . -mindepth 1 \
+      ! -name '.PKGINFO' \
+      ! -name '.BUILDINFO' \
+      ! -name '.MTREE' \
+      ! -name '.INSTALL' \
+      ! -name '.gptpm-prefix' \
+      ! -name '.gptpm-files' \
+      ! -name '.GPTP' \
+      -print |
+      sed 's#^\./##' |
+      sort
+  ) > "$target/.gptpm-files" || {
+    echo "  [-] Failed to create package manifest."
+    return 1
+  }
+
+  echo "  └─ Building .gptp..."
+
+  cat > "$target/.GPTP" <<EOF
+format=GPTP
+gversion=2
+gcreator=gptpm
+dev=$dev
+pkgname=$pkgname
+pkgver=$version
+arch=$arch
+type=package
+EOF
+
+  local gptp_tar="$TMP_DIR/${pkgname}-${version}.tar"
+  local gptp_out="$BUILD_DIR/${pkgname}-${version}.gptp"
+
+  tar -cf "$gptp_tar" \
+    --exclude='.PKGINFO' \
+    --exclude='.BUILDINFO' \
+    --exclude='.MTREE' \
+    --exclude='.INSTALL' \
+    --exclude='.gptpm-prefix' \
+    --exclude='.gptpm-files' \
+    -C "$target" . || {
+    echo "  [-] Failed to create package archive."
+    return 1
+  }
+
+  if ! tar -tf "$gptp_tar" | grep -qx './.GPTP'; then
+    echo "  [-] Failed to include .GPTP metadata."
+    return 1
+  fi
+
+  bash "$GPT_BUILD" cf "$gptp_tar" "$gptp_out" --gptpm || {
+    echo "  [-] Failed to create .gptp package."
+    rm -f "$gptp_tar"
+    return 1
+  }
+
+  rm -f "$gptp_tar"
+  rm -f "$archive"
+
+  return 0
+}
+
+install_gptp() {
+  local archive="$1"
+  local prefix="${2:-$PREFIX}"
+
+  [ -f "$archive" ] || {
+    echo "[!] Package not found: $archive"
+    return 1
+  }
+
+  [[ "$archive" == *.gptp ]] || {
+    echo "[!] Not a .gptp package: $archive"
+    return 1
+  }
+
+  require_cmd tar
+  require_cmd python3
+
+  echo "[*] Installing local package: $(basename "$archive")"
+  echo "    Prefix: $prefix"
+  echo ""
+
+  local workdir restored
+  workdir="$(mktemp -d)"
+  restored="$workdir/package.tar"
+
+  # Decode the GPTP container first.
+  bash "$GPT_BUILD" uf "$archive" "$restored" || {
+    rm -rf "$workdir"
+    echo "[!] Failed to decode GPTP package."
+    return 1
+  }
+
+  # GPTP payloads used as packages must contain a tar archive.
+  tar -tf "$restored" >/dev/null 2>&1 || {
+    rm -rf "$workdir"
+    echo "[!] GPTP payload is not a valid tar archive."
+    return 1
+  }
+
+  mkdir -p "$workdir/root"
+
+  tar -xf "$restored" -C "$workdir/root" || {
+    rm -rf "$workdir"
+    echo "[!] Failed to extract package archive."
+    return 1
+  }
+
+  # Read GPTPM package metadata.
+  local pkgname version
+  pkgname="$(sed -n 's/^pkgname=//p' "$workdir/root/.GPTP" 2>/dev/null | head -n 1)"
+  version="$(sed -n 's/^pkgver=//p' "$workdir/root/.GPTP" 2>/dev/null | head -n 1)"
+
+  # Backward compatibility for older GPTPs.
+  if [ -z "$pkgname" ]; then
+    pkgname="$(sed -n 's/^pkgname = //p' "$workdir/root/.PKGINFO" 2>/dev/null | head -n 1)"
+  fi
+
+  if [ -z "$pkgname" ]; then
+    pkgname="$(basename "$archive" .gptp)"
+  fi
+
+  if [ -z "$version" ]; then
+    version="$(basename "$archive" .gptp | sed "s/^${pkgname}-//")"
+  fi
+
+  # Install everything except Arch package metadata.
+  mkdir -p "$prefix"
+
+  for item in "$workdir/root"/* "$workdir/root"/.[!.]* "$workdir/root"/..?*; do
+    [ -e "$item" ] || [ -L "$item" ] || continue
+
+    case "$(basename "$item")" in
+      .PKGINFO|.BUILDINFO|.MTREE|.INSTALL|.GPTP)
+        continue
+        ;;
+    esac
+
+    cp -a "$item" "$prefix"/ || {
+      rm -rf "$workdir"
+      echo "[!] Failed to install package files."
+      return 1
+    }
+  done
+
+  # Save package ownership information for remove.
+  mkdir -p "$PKG_DIR/$pkgname"
+
+  printf '%s\n' "$prefix" > "$PKG_DIR/$pkgname/.gptpm-prefix"
+  printf '%s\n' "$version" > "$PKG_DIR/$pkgname/.gptpm-version"
+
+  (
+    cd "$workdir/root" || exit 1
+    find . -mindepth 1 \
+      ! -name '.PKGINFO' \
+      ! -name '.BUILDINFO' \
+      ! -name '.MTREE' \
+      ! -name '.INSTALL' \
+      ! -name '.GPTP' \
+      -print |
+      sed 's#^\./##' |
+      sort
+  ) > "$PKG_DIR/$pkgname/.gptpm-files"
+
+  rm -rf "$workdir"
+
+  echo ""
+  echo "[+] Package '$pkgname' installed successfully."
+}
+
+install_linux_kernel() {
+  local prefix="${1:-$PREFIX}"
+
+  echo "[*] Choose kernel:"
+  echo ""
+  echo "  1) linux-arch"
+  echo "  2) linux-lts"
+  echo "  3) kernel.org-linux"
+  echo ""
+
+  local choice
+  read -r -p "Select kernel [1-3]: " choice
+
+  local pkg
+  case "$choice" in
+  1) pkg="linux" ;;
+  2) pkg="linux-lts" ;;
+  3)
+    local gptos_root
+    gptos_root="$(cd "$ROOT/../.." && pwd)"
+    local bzimage="$gptos_root/kernel/linux-7.2/arch/x86/boot/bzImage"
+
+    if [ ! -f "$bzimage" ]; then
+      echo "[-] kernel.org-linux is not built."
+      echo "    Expected: $bzimage"
+      return 1
     fi
 
-    local download_url="https://archlinux.org/packages/$repo/$arch/$pkgname/download/"
-
-    download_single "$pkgname" "$download_url" "$TMP_DIR/$filename" || {
-        echo "  [-] Download failed."
-        echo ""
-        return 1
+    mkdir -p "$gptos_root/boot"
+    cp -f "$bzimage" "$gptos_root/boot/vmlinuz" || {
+      echo "[-] Failed to install kernel.org-linux."
+      return 1
     }
 
-    local archive="$TMP_DIR/$filename"
-
-    if [ ! -s "$archive" ]; then
-        echo "  [-] Downloaded file is empty."
-        rm -f "$archive"
-        return 1
-    fi
-
-    echo "  ├─ Extracting $pkgname..."
-    local target="$PKG_DIR/$pkgname"
-    rm -rf "$target"
-    mkdir -p "$target"
-
-    tar --use-compress-program=unzstd -xf "$archive" -C "$target" || {
-        echo "  [-] Extraction failed."
-        return 1
-    }
-
-    if [ -d "$target/usr/bin" ]; then
-        echo "  ├─ Linking binaries..."
-        for b in "$target/usr/bin"/*; do
-            [ -f "$b" ] || continue
-            local bn
-            bn=$(basename "$b")
-            chmod +x "$b"
-            ln -sf "$b" "$LOCAL_BIN/$bn"
-        done
-    fi
-
-    echo "  └─ Building .gptp..."
-    bash "$GPT_BUILD" "$pkgname" >/dev/null 2>&1
-
+    echo ""
+    echo "[+] kernel.org-linux installed."
+    echo "    Kernel: $gptos_root/boot/vmlinuz"
     return 0
+    ;;
+  *)
+    echo "[-] Invalid choice."
+    return 1
+    ;;
+  esac
+
+  require_cmd jq
+  require_cmd wget
+  require_cmd tar
+  require_cmd unzstd
+
+  echo ""
+  echo "[*] Installing $pkg..."
+
+  local json
+  json=$(query_api "$pkg") || {
+    echo "[-] Failed to query $pkg package."
+    return 1
+  }
+
+  local repo arch pkgname version filename
+  repo=$(echo "$json" | jq -r '.results[0].repo // ""')
+  arch=$(echo "$json" | jq -r '.results[0].arch // "x86_64"')
+  pkgname=$(echo "$json" | jq -r '.results[0].pkgname // ""')
+  version=$(echo "$json" | jq -r '.results[0].pkgver // ""')
+  filename=$(echo "$json" | jq -r '.results[0].filename // ""')
+
+  [ -n "$filename" ] || {
+    echo "[-] Could not determine $pkg package filename."
+    return 1
+  }
+
+  local url="https://archlinux.org/packages/$repo/$arch/$pkgname/download/"
+  local archive="$TMP_DIR/$filename"
+
+  download_single "$pkgname" "$url" "$archive" "$version" "$version" || {
+    echo "[-] Failed to download $pkg."
+    return 1
+  }
+
+  local extract_dir
+  extract_dir="$(mktemp -d)"
+
+  tar --use-compress-program=unzstd -xf "$archive" -C "$extract_dir" || {
+    rm -rf "$extract_dir"
+    echo "[-] Failed to extract $pkg."
+    return 1
+  }
+
+  local kernel
+  kernel="$(find "$extract_dir/usr/lib/modules" -type f -name vmlinuz | head -n 1)"
+
+  [ -n "$kernel" ] || {
+    rm -rf "$extract_dir"
+    echo "[-] Kernel image not found in $pkg package."
+    return 1
+  }
+
+  local gptos_root
+  gptos_root="$(cd "$ROOT/../.." && pwd)"
+
+  mkdir -p "$gptos_root/boot"
+  cp -f "$kernel" "$gptos_root/boot/vmlinuz" || {
+    rm -rf "$extract_dir"
+    echo "[-] Failed to install kernel image."
+    return 1
+  }
+
+  local modules_dir
+  modules_dir="$(dirname "$kernel")"
+
+  mkdir -p "$prefix/usr/lib/modules"
+  cp -a "$modules_dir" "$prefix/usr/lib/modules/" || {
+    rm -rf "$extract_dir"
+    echo "[-] Failed to install kernel modules."
+    return 1
+  }
+
+  rm -rf "$extract_dir"
+
+  echo ""
+  echo "[+] GPTOS kernel updated to $pkg $version"
+  echo "    Kernel: $gptos_root/boot/vmlinuz"
+  echo "    Modules: $prefix/usr/lib/modules/"
 }
 
 install_pkg() {
-    local pkg="$1"
-    if [ -z "$pkg" ]; then
-        echo "Usage: gpt install <package>"
-        return 1
+  local pkg="$1"
+  local prefix="${2:-$PREFIX}"
+
+  if [ "$pkg" = "linux" ]; then
+    install_linux_kernel "$prefix"
+    return $?
+  fi
+
+  if [ -z "$pkg" ]; then
+    echo "Usage: gpt install <package>"
+    return 1
+  fi
+
+  require_cmd jq
+  require_cmd wget
+  require_cmd tar
+  require_cmd unzstd
+
+  header
+
+  local json
+  json=$(query_api "$pkg") || {
+    echo "[-] Package '$pkg' not found."
+    return 1
+  }
+
+  local pkgname deps repo version filename
+
+  pkgname=$(echo "$json" | jq -r '.results[0].pkgname // .results[0].name // ""')
+  version=$(echo "$json" | jq -r '.results[0].pkgver // .results[0].version // ""')
+  repo=$(echo "$json" | jq -r '.results[0].repo // ""')
+  filename=$(echo "$json" | jq -r '.results[0].filename // ""')
+
+  deps=$(echo "$json" |
+    jq -r '.results[0].depends // [] | .[]' |
+    sed 's/[><=].*//g; s/^ *//; s/ *$//' |
+    grep -v '\.so' |
+    sort -u)
+
+  [ -n "$pkgname" ] || {
+    echo "[-] Failed to resolve package name."
+    return 1
+  }
+
+  [ -n "$version" ] || {
+    echo "[-] Failed to resolve package version."
+    return 1
+  }
+
+  local installed_version=""
+
+  if [ -f "$PKG_DIR/$pkgname/.gptpm-version" ]; then
+    installed_version="$(cat "$PKG_DIR/$pkgname/.gptpm-version")"
+  fi
+
+  if [ -n "$installed_version" ]; then
+    local installed_prefix=""
+    [ -f "$PKG_DIR/$pkgname/.gptpm-prefix" ] &&
+      installed_prefix="$(cat "$PKG_DIR/$pkgname/.gptpm-prefix")"
+
+    if [ "$installed_prefix" = "$prefix" ]; then
+      if [ "$installed_version" = "$version" ]; then
+        echo "[✓] $pkgname is already installed ($installed_version)"
+        return 0
+      fi
+
+      if [ "$(printf '%s\n%s\n' "$installed_version" "$version" | sort -V | tail -n 1)" = "$installed_version" ]; then
+        echo "[✓] $pkgname is already installed ($installed_version)"
+        return 0
+      fi
+
+      echo "[*] Updating $pkgname"
+      echo "    Installed: $installed_version"
+      echo "    Available: $version"
+    fi
+  fi
+
+  local install_deps=()
+  local dep pdep
+
+  for dep in $deps; do
+    [ -z "$dep" ] && continue
+
+    local dep_prefix=""
+    if [ -f "$PKG_DIR/$dep/.gptpm-prefix" ]; then
+      dep_prefix="$(cat "$PKG_DIR/$dep/.gptpm-prefix")"
     fi
 
-    require_cmd jq
-    require_cmd curl
-    require_cmd tar
-    require_cmd unzstd
+    [ "$dep_prefix" = "$prefix" ] && continue
 
-    header
-
-    local json
-    json=$(query_api "$pkg") || {
-        echo "[-] Package '$pkg' not found."
-        return 1
-    }
-
-    local pkgname deps
-    pkgname=$(echo "$json" | jq -r '.results[0].pkgname // .results[0].name // ""')
-    deps=$(echo "$json" | jq -r '.results[0].depends // [] | .[]' 2>/dev/null | sed 's/[><=].*//g; s/^ *//; s/ *$//' | grep -v '\.so' | sort -u)
-
-    [ -z "$pkgname" ] && {
-        echo "[-] Failed to resolve package name."
-        return 1
-    }
-
-    local install_deps=()
-    local dep pdep
-    for dep in $deps; do
-        [ -z "$dep" ] && continue
-        [ -d "$PKG_DIR/$dep" ] && continue
-        local skip=false
-        for pdep in "${install_deps[@]}"; do
-            [ "$pdep" = "$dep" ] && { skip=true; break; }
-        done
-        $skip && continue
-        install_deps+=("$dep")
+    local skip=false
+    for pdep in "${install_deps[@]}"; do
+      if [ "$pdep" = "$dep" ]; then
+        skip=true
+        break
+      fi
     done
 
-    local repo version filename
-    repo=$(echo "$json" | jq -r '.results[0].repo // ""')
-    version=$(echo "$json" | jq -r '.results[0].pkgver // .results[0].version // ""')
-    filename=$(echo "$json" | jq -r '.results[0].filename // ""')
+    $skip && continue
+    install_deps+=("$dep")
+  done
 
-    echo "[*] Resolving dependencies..."
+  echo "[*] Resolving dependencies..."
+  echo ""
+
+  if [ ${#install_deps[@]} -gt 0 ]; then
+    echo "    Package: $pkgname ($version)"
+    echo "    Dependencies: ${install_deps[*]}"
+  else
+    echo "    Package: $pkgname ($version)"
+    echo "    Dependencies: (none needed)"
+  fi
+
+  echo ""
+
+  for dep in "${install_deps[@]}"; do
+    echo "  ├─ Installing dependency: $dep"
+    install_pkg "$dep" "$prefix" || return $?
     echo ""
+  done
 
-    if [ ${#install_deps[@]} -gt 0 ]; then
-        echo "    Package: $pkgname ($version)"
-        echo "    Dependencies: ${install_deps[*]}"
-        echo ""
-    else
-        echo "    Package: $pkgname ($version)"
-        echo "    Dependencies: (none needed)"
-        echo ""
-    fi
+  echo "  ├─ Installing: $pkgname"
+  install_single "$pkg" "$prefix" || return $?
+  echo ""
 
-    for dep in "${install_deps[@]}"; do
-        echo "  ├─ Installing dependency: $dep"
-        install_single "$dep"
-        echo ""
-    done
-
-    echo "  ├─ Installing: $pkgname"
-    install_single "$pkg"
-    echo ""
-
-    echo "  └─ Done"
-    echo ""
-    echo "[+] Package '$pkgname' installed successfully."
-    echo "    Binaries linked to $LOCAL_BIN"
-    echo "    Archive: build/${pkgname}-${version}.gptp"
+  echo "  └─ Done"
+  echo ""
+  echo "[+] Package '$pkgname' installed successfully."
+  echo "    Archive: build/${pkgname}-${version}.gptp"
 }
 
 remove_pkg() {
-    local pkg="$1"
-    if [ -z "$pkg" ]; then
-        echo "Usage: gpt remove <package>"
-        return 1
-    fi
+  local pkg="$1"
 
-    header
+  if [ -z "$pkg" ]; then
+    echo "Usage: gpt remove <package>"
+    return 1
+  fi
 
-    local target="$PKG_DIR/$pkg"
-    if [ ! -d "$target" ]; then
-        echo "[-] Package '$pkg' is not installed."
-        return 1
-    fi
+  header
 
-    echo "[*] Removing package: $pkg"
-    echo ""
+  local target="$PKG_DIR/$pkg"
 
-    if [ -d "$target/usr/bin" ]; then
-        echo "[*] Removing binary symlinks..."
-        for b in "$target/usr/bin"/*; do
-            [ -f "$b" ] || continue
-            local bn
-            bn=$(basename "$b")
-            rm -f "$LOCAL_BIN/$bn"
-            echo "    -> removed $bn"
-        done
-        echo ""
-    fi
+  if [ ! -d "$target" ]; then
+    echo "[-] Package '$pkg' is not installed."
+    return 1
+  fi
 
+  local prefix="$PREFIX"
+
+  if [ -f "$target/.gptpm-prefix" ]; then
+    prefix="$(cat "$target/.gptpm-prefix")"
+  fi
+
+  echo "[*] Removing package: $pkg"
+  echo "    Prefix: $prefix"
+  echo ""
+
+  if [ -f "$target/.gptpm-files" ]; then
     echo "[*] Removing package files..."
-    rm -rf "$target"
 
-    for gptf in "$BUILD_DIR/$pkg"*.gptp; do
-        [ -f "$gptf" ] || continue
-        rm -f "$gptf"
-        echo "[*] Removed .gptp: $(basename "$gptf")"
-    done
+    # Remove files/symlinks first.
+    while IFS= read -r rel; do
+      [ -n "$rel" ] || continue
+      [ -e "$prefix/$rel" ] || [ -L "$prefix/$rel" ] || continue
 
-    echo ""
-    echo "[+] Package '$pkg' removed successfully."
+      if [ -d "$prefix/$rel" ] && [ ! -L "$prefix/$rel" ]; then
+        continue
+      fi
+
+      rm -f -- "$prefix/$rel"
+    done < "$target/.gptpm-files"
+
+    # Then remove empty directories, deepest first.
+    while IFS= read -r rel; do
+      [ -n "$rel" ] || continue
+      rmdir -- "$prefix/$rel" 2>/dev/null || true
+    done < <(
+      grep '/\|^' "$target/.gptpm-files" |
+        awk '{print}' |
+        sort -r
+    )
+  fi
+
+  rm -rf "$target"
+
+  for gptf in "$BUILD_DIR/$pkg"-*.gptp; do
+    [ -f "$gptf" ] || continue
+    rm -f "$gptf"
+    echo "[*] Removed .gptp: $(basename "$gptf")"
+  done
+
+  echo ""
+  echo "[+] Package '$pkg' removed successfully."
 }
 
 list_pkg() {
-    header
-    echo "[*] Installed packages:"
-    echo ""
+  local query="${1:-}"
+  local found=0
 
-    local count=0
-    for d in "$PKG_DIR"/*/; do
-        [ -d "$d" ] || continue
-        local name
-        name=$(basename "$d")
-        local ver="?"
-        if [ -f "$d/.PKGINFO" ]; then
-            ver=$(grep '^pkgver' "$d/.PKGINFO" 2>/dev/null | sed 's/pkgver = //' | head -1)
-            [ -z "$ver" ] && ver="?"
-        fi
-        printf "    %-24s %s\n" "$name" "$ver"
-        count=$((count + 1))
-    done
+  for pkg in "$PKG_DIR"/*; do
+    [ -d "$pkg" ] || continue
 
-    if [ "$count" -eq 0 ]; then
-        echo "    (no packages installed)"
+    local name
+    name="$(basename "$pkg")"
+
+    if [ -n "$query" ]; then
+      case "$name" in
+      *"$query"*) ;;
+      *) continue ;;
+      esac
     fi
-    echo ""
+
+    local version="unknown"
+
+    if [ -f "$pkg/.gptpm-version" ]; then
+      version="$(cat "$pkg/.gptpm-version")"
+    fi
+
+    [ -n "$version" ] || version="unknown"
+
+    printf '%-30s %s\n' "$name" "$version"
+    found=1
+  done
+
+  if [ "$found" -eq 0 ]; then
+    if [ -n "$query" ]; then
+      echo "No installed packages matching: $query"
+    else
+      echo "No packages installed."
+    fi
+  fi
 }
 
 version() {
-    echo "GPT Package Manager v1.0.0"
+  echo "GPT Package Manager v2.0.0"
 }
 
 help() {
-    header
-    echo "Usage: gpt <command> [<args>]"
-    echo ""
-    echo "Commands:"
-    echo "    install <pkg>    Install a package from Arch Linux"
-    echo "    remove <pkg>     Remove an installed package"
-    echo "    list             List installed packages"
-    echo "    version          Show version information"
-    echo "    help             Show this help message"
-    echo ""
+  cat <<'EOF'
+GPTPM v2.0 - GPT Package Manager
+
+Usage:
+  gpt <command> [options] [packages]
+
+Commands:
+  install <packages...>       Install one or more packages
+  install -f <file.gptp>      Install a local .gptp package
+  remove <packages...>        Remove one or more packages
+  search <query>              Search available packages
+  list [query]                List installed packages
+  version                     Show GPTPM version
+  cf <file> [output.gptp]     Convert a file to .gptp
+  uf <file.gptp> [output]     Undo a .gptp file
+  ex <file.gptp> [output]     Extract a .gptp file
+  help                        Show this help message
+
+Options:
+  --prefix=PATH               Use PATH as the installation prefix
+  --prefixd=PATH              Set PATH as the persistent default prefix
+  --noclear                   Do not clear the screen before install/remove
+  -v, --verbose               Enable verbose output
+  -f, --file FILE             Install a local .gptp package
+
+GPTP flags:
+  -cf, --convertf             Convert a file to .gptp
+  -uf, --undof                Undo a .gptp file
+  -ex, --extract              Extract a .gptp file
+  -exf                        Extract a .gptp file
+  -exvf, -vexf                Extract a .gptp file verbosely
+
+Examples:
+  sudo gpt install bash
+  sudo gpt install -f package.gptp
+  sudo gpt remove bash
+  gpt cf archive.tar
+  gpt uf archive.gptp
+  gpt ex archive.gptp
+
+Notes:
+  --prefixd changes the default prefix permanently.
+  Install/remove operations require root privileges.
+EOF
 }
 
-case "${1:-help}" in
-    install) install_pkg "$2" ;;
-    remove)  remove_pkg "$2" ;;
-    list)    list_pkg ;;
-    version) version ;;
-    help)    help ;;
-    *)
-        echo "Unknown command: $1"
-        echo "Usage: gpt <install|remove|list|version|help>"
-        exit 1
+
+# Host development mode.
+# Hidden from normal help; intended only for development on the host.
+DEVOPT=0
+
+# Allow hidden --devopt before the command.
+if [ "${1:-}" = "--devopt" ]; then
+  DEVOPT=1
+  shift
+fi
+
+# GPTP conversion commands.
+case "${1:-}" in
+cf|--convertf|-cf)
+  shift
+  [ $# -ge 1 ] || { echo "[!] Usage: gpt cf <file> [output.gptp]"; exit 1; }
+  bash "$GPT_BUILD" cf "$1" "${2:-}"
+  exit $?
+  ;;
+
+uf|--undof|-uf)
+  shift
+  [ $# -ge 1 ] || { echo "[!] Usage: gpt uf <file.gptp> [output]"; exit 1; }
+  bash "$GPT_BUILD" uf "$1" "${2:-}"
+  exit $?
+  ;;
+
+ex|--extract|-ex)
+  shift
+  verbose=0
+  file=""
+  output=""
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -v|--verbose)
+        verbose=1
+        shift
         ;;
+      -f|--file)
+        [ $# -ge 2 ] || { echo "[!] -f requires a .gptp file."; exit 1; }
+        file="$2"
+        shift 2
+        ;;
+      *)
+        if [ -z "$file" ]; then
+          file="$1"
+        elif [ -z "$output" ]; then
+          output="$1"
+        else
+          echo "[!] Too many arguments."
+          exit 1
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  [ -n "$file" ] || {
+    echo "[!] Usage: gpt ex [-v] [-f|--file] <file.gptp> [output]"
+    exit 1
+  }
+
+  [ "$verbose" -eq 1 ] && echo "[*] Extracting: $file"
+  bash "$GPT_BUILD" uf "$file" "$output"
+  exit $?
+  ;;
+
+-exf|-exvf|-vexf)
+  mode="$1"
+  shift
+  [ $# -ge 1 ] || { echo "[!] Usage: gpt $mode <file.gptp> [output]"; exit 1; }
+  bash "$GPT_BUILD" uf "$1" "${2:-}"
+  exit $?
+  ;;
+esac
+
+case "${1:-help}" in
+install | remove)
+  prefix="$PREFIX"
+  explicit_prefix=0
+  noclear=0
+  packages=()
+  archive=""
+  command="$1"
+
+  shift
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    --noclear)
+      NOCLEAR=1
+      noclear=1
+      shift
+      ;;
+    -v|--verbose)
+      shift
+      ;;
+    --devopt)
+      DEVOPT=1
+      shift
+      ;;
+    -f|--file)
+      [ "$command" = "install" ] || {
+        echo "[!] -f can only be used with install."
+        exit 1
+      }
+      [ $# -ge 2 ] || {
+        echo "[!] -f requires a .gptp file."
+        exit 1
+      }
+      archive="$2"
+      shift 2
+      ;;
+    --prefix=*)
+      prefix="${1#--prefix=}"
+      explicit_prefix=1
+      shift
+      ;;
+    --prefixd=*)
+      new_prefix="${1#--prefixd=}"
+
+      [ "$(id -u)" -eq 0 ] || {
+        echo "[!] --prefixd requires root privileges."
+        echo "    Run it with sudo."
+        exit 1
+      }
+
+      mkdir -p "$CONFIG_DIR"
+      printf 'PREFIX_DEFAULT=%q\n' "$new_prefix" >"$CONFIG_FILE"
+      PREFIX="$new_prefix"
+      [ "$explicit_prefix" -eq 1 ] || prefix="$new_prefix"
+      shift
+      ;;
+
+    *)
+      packages+=("$1")
+      shift
+      ;;
+    esac
+  done
+
+  if [ "$DEVOPT" -eq 1 ] && [ "$explicit_prefix" -eq 0 ]; then
+    GPTOS_ROOT="$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)"
+    prefix="$GPTOS_ROOT/rootfs"
+  fi
+
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "[!] This operation requires root privileges."
+    echo "    Run it with sudo."
+    exit 1
+  fi
+
+  [ "$noclear" -eq 1 ] || clear
+
+  if [ "$command" = "install" ]; then
+    if [ -n "${archive:-}" ]; then
+      [ "${#packages[@]}" -eq 0 ] || {
+        echo "[!] Cannot combine -f with package names."
+        exit 1
+      }
+      install_gptp "$archive" "$prefix" || exit $?
+    elif [ "${#packages[@]}" -gt 0 ]; then
+      for pkg in "${packages[@]}"; do
+        install_pkg "$pkg" "$prefix" || exit $?
+      done
+    else
+      echo "[!] No package specified."
+      exit 1
+    fi
+  else
+    [ "${#packages[@]}" -gt 0 ] || {
+      echo "[!] No package specified."
+      exit 1
+    }
+
+    for pkg in "${packages[@]}"; do
+      remove_pkg "$pkg" || exit $?
+    done
+  fi
+  ;;
+
+search)
+  shift
+
+  [ $# -gt 0 ] || {
+    echo "[!] No search query specified."
+    exit 1
+  }
+
+  search_pkg "$*"
+  ;;
+
+list)
+  shift
+  list_pkg "$1"
+  ;;
+
+version)
+  version
+  ;;
+
+help)
+  help
+  ;;
+
+*)
+  case "$1" in
+  --prefixd=*)
+    new_prefix="${1#--prefixd=}"
+
+    [ "$(id -u)" -eq 0 ] || {
+      echo "[!] --prefixd requires root privileges."
+      echo "    Run it with sudo."
+      exit 1
+    }
+
+    mkdir -p "$CONFIG_DIR"
+    printf 'PREFIX_DEFAULT=%q\n' "$new_prefix" >"$CONFIG_FILE"
+    PREFIX="$new_prefix"
+    echo "[+] Default prefix set to: $new_prefix"
+    ;;
+  *)
+    echo "Unknown command: $1"
+    echo "Usage: gpt <command> [options] [packages]"
+    exit 1
+    ;;
+  esac
+  ;;
 esac
