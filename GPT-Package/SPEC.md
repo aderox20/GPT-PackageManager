@@ -27,7 +27,7 @@ GPTP file
 
 |     Size | Field                    |
 | -------: | ------------------------ |
-|  4 bytes | Magic: `GPTP`            |
+|  4 bytes | Magic: `FF 20 20 69`            |
 |   1 byte | Format version           |
 |   1 byte | Flags                    |
 |  4 bytes | Header size              |
