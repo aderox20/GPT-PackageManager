@@ -1,7 +1,3 @@
-# Spec File
-````bash
-mkdir -p GPT-Package
-cat > GPT-Package/SPEC.md <<'EOF'
 # GPT Package File (GPTP) Specification
 
 ## Status
