@@ -7,7 +7,7 @@ PKG_DIR="$ROOT/packages"
 TMP_DIR="$ROOT/tmp"
 BUILD_DIR="$ROOT/build"
 
-PREFIX_DEFAULT="/usr"
+PREFIX_DEFAULT="/"
 CONFIG_DIR="${GPTPM_CONFIG_DIR:-/etc/gptpm}"
 CONFIG_FILE="$CONFIG_DIR/config"
 
@@ -386,6 +386,18 @@ install_gptp() {
     version="$(basename "$archive" .gptp | sed "s/^${pkgname}-//")"
   fi
 
+  # Package names must not escape the package directory.
+  if [ -z "$pkgname" ] ||
+     [ "$pkgname" = "." ] ||
+     [ "$pkgname" = ".." ] ||
+     [[ "$pkgname" == */* ]] ||
+     [[ "$pkgname" == *\\* ]] ||
+     [[ "$pkgname" == *..* ]]; then
+    rm -rf "$workdir"
+    echo "[!] Invalid package name: $pkgname"
+    return 1
+  fi
+
   # Install everything except Arch package metadata.
   mkdir -p "$prefix"
 
@@ -582,10 +594,19 @@ install_pkg() {
     return 1
   }
 
-  local pkgname deps repo version filename
+  local pkgname deps repo pkgver pkgrel epoch version filename
 
   pkgname=$(echo "$json" | jq -r '.results[0].pkgname // .results[0].name // ""')
-  version=$(echo "$json" | jq -r '.results[0].pkgver // .results[0].version // ""')
+  pkgver=$(echo "$json" | jq -r '.results[0].pkgver // .results[0].version // ""')
+  pkgrel=$(echo "$json" | jq -r '.results[0].pkgrel // "1"')
+  epoch=$(echo "$json" | jq -r '.results[0].epoch // 0')
+
+  if [ "$epoch" != "0" ] && [ -n "$epoch" ]; then
+    version="${epoch}:${pkgver}-${pkgrel}"
+  else
+    version="${pkgver}-${pkgrel}"
+  fi
+
   repo=$(echo "$json" | jq -r '.results[0].repo // ""')
   filename=$(echo "$json" | jq -r '.results[0].filename // ""')
 
