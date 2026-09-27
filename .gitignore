@@ -1,5 +1,3 @@
 build/*
 tmp/*
-
-# GPTPM runtime data
 packages/*/
