@@ -812,7 +812,7 @@ list_pkg() {
 }
 
 version() {
-  echo "GPT Package Manager v2.0.0"
+  echo "GPT Package Manager v2.0.1"
 }
 
 help() {
