@@ -5,10 +5,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 if [ "$1" = "cf" ]; then
     input="$2"
     output="$3"
-    origin="$4"
 
     if [ -z "$input" ] || [ ! -f "$input" ]; then
-        echo "Usage: gpt cf <file> [output.gptp] [--gptpm]"
+        echo "Usage: gpt cf <file> [output.gptp]"
         exit 1
     fi
 
@@ -16,10 +15,7 @@ if [ "$1" = "cf" ]; then
         output="${input%.*}.gptp"
     fi
 
-    flags=0
-    if [ "$origin" = "--gptpm" ]; then
-        flags=0x69
-    fi
+    flags=0x69
 
     python3 - "$input" "$output" "$flags" <<'PYTHON'
 import hashlib
@@ -144,6 +140,6 @@ PYTHON
 fi
 
 echo "Usage:"
-echo "  build_gptp.sh cf <file> [output.gptp] [--gptpm]"
+echo "  build_gptp.sh cf <file> [output.gptp]"
 echo "  build_gptp.sh uf <file.gptp> [output]"
 exit 1
