@@ -309,7 +309,7 @@ EOF
     return 1
   fi
 
-  bash "$GPT_BUILD" cf "$gptp_tar" "$gptp_out" --gptpm || {
+  bash "$GPT_BUILD" cf "$gptp_tar" "$gptp_out" || {
     echo "  [-] Failed to create .gptp package."
     rm -f "$gptp_tar"
     return 1
@@ -812,12 +812,131 @@ list_pkg() {
 }
 
 version() {
-  echo "GPT Package Manager v2.0.1"
+  echo "GPT Package Manager v2.1"
+}
+
+self_update() {
+  [ "$(id -u)" -eq 0 ] || {
+    echo "[!] Self-update requires root privileges."
+    echo "    Run it with sudo."
+    return 1
+  }
+
+  require_cmd git
+  require_cmd sort
+
+  local repo="https://github.com/aderox20/GPT-PackageManager"
+  local local_gver="$ROOT/.GVER"
+  local update_dir
+  update_dir="$(mktemp -d)"
+
+  echo "[*] Checking GPTPM version..."
+  echo ""
+
+  if [ ! -f "$local_gver" ]; then
+    echo "[!] Local .GVER not found: $local_gver"
+    rm -rf "$update_dir"
+    return 1
+  fi
+
+  local local_pkg local_ver
+  local_pkg="$(sed -n 's/^pkg=//p' "$local_gver" | head -n 1)"
+  local_ver="$(sed -n 's/^ver=//p' "$local_gver" | head -n 1)"
+
+  if [ "$local_pkg" != "ogpm" ] || [ -z "$local_ver" ]; then
+    echo "[!] Invalid local .GVER."
+    rm -rf "$update_dir"
+    return 1
+  fi
+
+  echo "    Installed: $local_ver"
+
+  git clone --depth 1 "$repo" "$update_dir/GPT-PackageManager" >/dev/null 2>&1 || {
+    rm -rf "$update_dir"
+    echo "[!] Failed to clone GPTPM repository."
+    return 1
+  }
+
+  local remote_gver="$update_dir/GPT-PackageManager/.GVER"
+
+  if [ ! -f "$remote_gver" ]; then
+    rm -rf "$update_dir"
+    echo "[!] Repository does not contain .GVER."
+    return 1
+  fi
+
+  local remote_pkg remote_ver
+  remote_pkg="$(sed -n 's/^pkg=//p' "$remote_gver" | head -n 1)"
+  remote_ver="$(sed -n 's/^ver=//p' "$remote_gver" | head -n 1)"
+
+  if [ "$remote_pkg" != "ogpm" ] || [ -z "$remote_ver" ]; then
+    rm -rf "$update_dir"
+    echo "[!] Invalid repository .GVER."
+    return 1
+  fi
+
+  echo "    Available: $remote_ver"
+  echo ""
+
+  local local_cmp="${local_ver#v}"
+  local remote_cmp="${remote_ver#v}"
+
+  if [ "$local_cmp" = "$remote_cmp" ] ||
+     [ "$(printf '%s\n%s\n' "$remote_cmp" "$local_cmp" | sort -V | tail -n 1)" = "$local_cmp" ]; then
+    echo "[✓] GPTPM is already up to date."
+    rm -rf "$update_dir"
+    return 0
+  fi
+
+  echo "[*] Updating GPTPM..."
+  echo "    $local_ver -> $remote_ver"
+  echo ""
+
+  local new_gpt="$update_dir/GPT-PackageManager/gpt"
+  local new_builder="$update_dir/GPT-PackageManager/GPT-Package/build_gptp.sh"
+
+  [ -f "$new_gpt" ] || {
+    rm -rf "$update_dir"
+    echo "[!] Cloned repository does not contain gpt."
+    return 1
+  }
+
+  [ -f "$new_builder" ] || {
+    rm -rf "$update_dir"
+    echo "[!] Cloned repository does not contain GPTP builder."
+    return 1
+  }
+
+  chmod 755 "$new_gpt" "$new_builder"
+
+  install -m 755 "$new_gpt" "$SCRIPT_PATH" || {
+    rm -rf "$update_dir"
+    echo "[!] Failed to update gpt."
+    return 1
+  }
+
+  install -m 755 "$new_builder" "$GPT_BUILD" || {
+    rm -rf "$update_dir"
+    echo "[!] Failed to update GPTP builder."
+    return 1
+  }
+
+  install -m 644 "$remote_gver" "$local_gver" || {
+    rm -rf "$update_dir"
+    echo "[!] Failed to update .GVER."
+    return 1
+  }
+
+  rm -rf "$update_dir"
+
+  echo ""
+  echo "[+] GPTPM updated successfully."
+  "$SCRIPT_PATH" version
 }
 
 help() {
   cat <<'EOF'
-GPTPM v2.0 - GPT Package Manager
+GPTPM v2.1 - GPT Package Manager
 
 Usage:
   gpt <command> [options] [packages]
@@ -829,6 +948,7 @@ Commands:
   search <query>              Search available packages
   list [query]                List installed packages
   version                     Show GPTPM version
+  self-update                 Update GPTPM from its GitHub repository
   cf <file> [output.gptp]     Convert a file to .gptp
   uf <file.gptp> [output]     Undo a .gptp file
   ex <file.gptp> [output]     Extract a .gptp file
@@ -1062,6 +1182,11 @@ list)
 
 version)
   version
+  ;;
+
+self-update|update)
+  self_update
+  exit $?
   ;;
 
 help)
